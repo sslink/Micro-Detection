@@ -122,7 +122,7 @@ def resize_ROI(selected_rec, size):
         y *= size
         w *= size
         h *= size
-        fullsize_rec.append([x,y,w,h])
+        fullsize_rec.append(np.array([x,y,w,h]).astype(np.int).tolist())
     return fullsize_rec
 """
     画出候选框结果
@@ -288,7 +288,7 @@ def img_2_Torch(img):
     mean = torch.mean(torch.tensor(means)) # 0.3971
     std = torch.mean(torch.tensor(stds))   # 0.0598
     
-    im_aug = tfs.Compose([tfs.ToTensor(),tfs.Normalize([mean,mean,mean],[std,std,std])])
+    im_aug = tfs.Compose([tfs.ToTensor(),tfs.Normalize([mean,mean,mean],[std,std,std])]) #,tfs.Normalize([mean,mean,mean],[std,std,std])
     for i in img:
         # 单通道变三通道
         image = np.expand_dims(i, axis=2)
@@ -296,9 +296,11 @@ def img_2_Torch(img):
         image = tfs.ToPILImage()(image)
         image = im_aug(image)
         # 三通道变单通道
-        img_set.append(image[0]) 
-        img_set_3.append(image)
-    return np.array(img_set),np.array(img_set_3)
+        img_set.append(image[0].numpy()) 
+        img_set_3.append(image.numpy())
+    img_set = torch.tensor(img_set)
+    img_set_3 = torch.tensor(img_set_3)
+    return img_set,img_set_3
 """
     整个ROI提取和预处理流程
     Output: ROI pointset, normalize_transform image
@@ -306,8 +308,9 @@ def img_2_Torch(img):
 def cal_ROI(src_image,src_label):
     ROI5 = []
     image_set_dst = []
+    print(len(src_image))
+    del_list = []
     for k in range(len(src_image)):
-        print(k,len(src_image))
         image = src_image[k]
         label = src_label[k]     
         cA, dst = preprocessing(image)  # 此时dst已经resize过
@@ -316,8 +319,9 @@ def cal_ROI(src_image,src_label):
         candidates = _get_ssinfo_(cA)  # 获取候选框
         selected_rec = _selectedROI_(edges=edges, candidates=candidates)  # 第一次筛选候选框
         if len(selected_rec) == 0: # 会跳图
+            del_list.append(k)
             continue
-        selected_rec = resize_ROI(selected_rec, 2)  # 扩大候选框面积,小波变换是1/2，恢复到原来的大小
+        selected_rec = resize_ROI(selected_rec, 2)  # 扩大候选框面积,小波变换是1/2，恢复到原来的大小 
         selected_rec = evaluation_rec(selected_rec, dst)  # 对selected_rec做策略排序
         # 将候选框的数量定格在5或10，返回值是一个list，其中包含了5or10个ROI坐标信息，依次为（y1,y2,x1,x2）
         one_vector,_= normalize_ROI(selected_rec, dst)
@@ -327,8 +331,14 @@ def cal_ROI(src_image,src_label):
         if roi_count==5:
             ROI5.append(np.array(one_vector))
             image_set_dst.append(dst)
-    src_image,_ = img_2_Torch(src_image)
-    image_set_dst,_ = img_2_Torch(image_set_dst)
+            
+    # 对应都删除
+    temp_src_image = np.delete(np.array(src_image),del_list,axis=0)
+    # normalize之后的
+    _,src_image = img_2_Torch(temp_src_image)
+    _,image_set_dst = img_2_Torch(image_set_dst)
+    
     new_ROI5 = torch.tensor(ROI5)
     new_ROI5 = new_ROI5.view(len(new_ROI5),6,1,4)
-    return ROI5,torch.tensor(image_set_dst),torch.tensor(src_image)
+    
+    return new_ROI5,image_set_dst,src_image,del_list
